@@ -1,42 +1,14 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:http/http.dart' as http;
+import 'package:task_moastafa_akkam/product/model/product_model.dart';
+import 'package:task_moastafa_akkam/product/repo/product_bloc/product_bloc.dart';
+import 'package:task_moastafa_akkam/product/repo/product_bloc/product_event.dart';
+import 'package:task_moastafa_akkam/product/repo/product_bloc/product_state.dart';
 
 import 'product_details_screen.dart';
 import 'cart_screen.dart';
-import 'profile_screen.dart';
-
-// Simple product model matching fakestoreapi.com response
-class Product {
-  final int id;
-  final String title;
-  final double price;
-  final String description;
-  final String category;
-  final String image;
-
-  Product({
-    required this.id,
-    required this.title,
-    required this.price,
-    required this.description,
-    required this.category,
-    required this.image,
-  });
-
-  factory Product.fromJson(Map<String, dynamic> json) {
-    return Product(
-      id: json['id'] as int,
-      title: json['title'] as String,
-      price: (json['price'] as num).toDouble(),
-      description: json['description'] as String,
-      category: json['category'] as String,
-      image: json['image'] as String,
-    );
-  }
-}
+import '../../auth/screens/profile_screen.dart';
 
 class ProductsScreen extends StatefulWidget {
   const ProductsScreen({super.key});
@@ -47,15 +19,13 @@ class ProductsScreen extends StatefulWidget {
 
 class _ProductsScreenState extends State<ProductsScreen> {
   final TextEditingController _searchController = TextEditingController();
-  List<Product> _allProducts = [];
-  List<Product> _filteredProducts = [];
-  bool _isLoading = true;
-  String? _error;
+  List<ProductModel> _allProducts = [];
+  List<ProductModel> _filteredProducts = [];
 
   @override
   void initState() {
     super.initState();
-    _fetchProducts();
+    context.read<ProductBloc>().add(FetchProductsEvent());
     _searchController.addListener(_onSearchChanged);
   }
 
@@ -65,34 +35,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
     super.dispose();
   }
 
-  Future<void> _fetchProducts() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
-    try {
-      final res = await http.get(Uri.parse('https://fakestoreapi.com/products'));
-      if (res.statusCode == 200) {
-        final List<dynamic> data = json.decode(res.body) as List<dynamic>;
-        final products = data.map((e) => Product.fromJson(e as Map<String, dynamic>)).toList();
-        setState(() {
-          _allProducts = products;
-          _filteredProducts = products;
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _error = 'Failed to load products (${res.statusCode})';
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      setState(() {
-        _error = 'Error: $e';
-        _isLoading = false;
-      });
-    }
-  }
+  Future<void> _refresh() async => context.read<ProductBloc>().add(FetchProductsEvent());
 
   void _onSearchChanged() {
     final q = _searchController.text.trim().toLowerCase();
@@ -101,7 +44,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
     } else {
       setState(() {
         _filteredProducts = _allProducts
-            .where((p) => p.title.toLowerCase().contains(q))
+            .where((p) => (p.title ?? '').toLowerCase().contains(q))
             .toList();
       });
     }
@@ -145,67 +88,79 @@ class _ProductsScreenState extends State<ProductsScreen> {
         ],
       ),
       body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _fetchProducts,
-          child: CustomScrollView(
-            slivers: [
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                  child: _SearchBar(controller: _searchController),
-                ),
-              ),
-              if (_isLoading)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(child: CircularProgressIndicator()),
-                )
-              else if (_error != null)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!, style: textTheme.bodyMedium?.copyWith(color: Colors.red)),
-                        const SizedBox(height: 12),
-                        FilledButton.icon(
-                          onPressed: _fetchProducts,
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Retry'),
-                        )
-                      ],
+        child: BlocConsumer<ProductBloc, ProductState>(
+          listener: (context, state) {
+            if (state.productStatus == Status.success) {
+              _allProducts = (state.products as List<ProductModel>? ?? []);
+              _filteredProducts = List.of(_allProducts);
+            }
+          },
+          builder: (context, state) {
+            final isLoading = state.productStatus == Status.loading;
+            final isError = state.productStatus == Status.error;
+            return RefreshIndicator(
+              onRefresh: _refresh,
+              child: CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                      child: _SearchBar(controller: _searchController),
                     ),
                   ),
-                )
-              else if (_filteredProducts.isEmpty)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(child: Text('No products found')),
-                )
-              else
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  sliver: SliverList.builder(
-                    itemBuilder: (context, index) {
-                      final product = _filteredProducts[index];
-                      return _ProductCard(
-                        product: product,
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ProductDetailsScreen(product: product),
-                            ),
+                  if (isLoading)
+                    const SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (isError)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('Failed to load products', style: textTheme.bodyMedium?.copyWith(color: Colors.red)),
+                            const SizedBox(height: 12),
+                            FilledButton.icon(
+                              onPressed: _refresh,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Retry'),
+                            )
+                          ],
+                        ),
+                      ),
+                    )
+                  else if (_filteredProducts.isEmpty)
+                    const SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Center(child: Text('No products found')),
+                    )
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                      sliver: SliverList.builder(
+                        itemBuilder: (context, index) {
+                          final product = _filteredProducts[index];
+                          return _ProductCard(
+                            product: product,
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ProductDetailsScreen(product: product),
+                                ),
+                              );
+                            },
                           );
                         },
-                      );
-                    },
-                    itemCount: _filteredProducts.length,
-                  ),
-                ),
-            ],
-          ),
+                        itemCount: _filteredProducts.length,
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
         ),
       ),
     );
@@ -240,7 +195,7 @@ class _SearchBar extends StatelessWidget {
 }
 
 class _ProductCard extends StatelessWidget {
-  final Product product;
+  final ProductModel product;
   final VoidCallback onTap;
   const _ProductCard({required this.product, required this.onTap});
 
@@ -271,7 +226,7 @@ class _ProductCard extends StatelessWidget {
                   child: SizedBox.square(
                     dimension: 88,
                     child: Image.network(
-                      product.image,
+                      product.image ?? '',
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => const ColoredBox(
                         color: Color(0xFFF0F0F0),
@@ -286,14 +241,14 @@ class _ProductCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        product.title,
+                        product.title ?? '',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        product.description,
+                        product.description ?? '',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: textTheme.bodyMedium?.copyWith(color: Colors.black87),
@@ -308,7 +263,7 @@ class _ProductCard extends StatelessWidget {
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
-                              '\$${product.price.toStringAsFixed(2)}',
+                              '\$${(product.price ?? 0).toStringAsFixed(2)}',
                               style: textTheme.labelLarge?.copyWith(color: const Color(0xFF1F6E4D), fontWeight: FontWeight.w700),
                             ),
                           ),
